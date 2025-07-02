@@ -1,0 +1,28 @@
+[tool.poetry]
+name = "vector_gwas_exploration"
+version = "0.1.0"
+description = "Cloud-native tools for detecting insecticide resistance"
+authors = ["Mohamed Laarej <mohamed.laarej.eng@gmail.com>"]
+packages = [{ include = "src" }]
+
+[tool.poetry.dependencies]
+python = "^3.9"
+pandas = "^2.0"
+numpy = "^1.25"
+xarray = "^2023.1"
+matplotlib = "^3.7"
+seaborn = "^0.12"
+statsmodels = "^0.14"
+pymc = "^5.0"
+scikit-learn = "^1.2"
+jupyter = "^1.0"
+malariagen-data = "*"
+
+[tool.poetry.dev-dependencies]
+pytest = "^7.0"
+black = "^24.0"
+flake8 = "^6.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
