@@ -26,11 +26,12 @@ class ResistanceSimulator:
         This is a potentially slow operation and includes a progress bar.
         """
         print(f"Fetching {region} for {self.n} samples from the cloud...")
+        sample_query = f"sample_id in {self.sample_ids}"
         try:
             ds_plan = self.ag3.snp_calls(
                 region=region, 
                 sample_sets=self.available_sample_sets,
-                samples=self.sample_ids
+                sample_query=sample_query
             )
             
             ds = ds_plan.compute()    
