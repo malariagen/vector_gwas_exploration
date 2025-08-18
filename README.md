@@ -38,6 +38,9 @@ gsoc-malaria-ir-detection/
 │ ├── data/ # Data loading & simulation
 │ ├── models/ # Statistical model implementations (e.g., mixed models, Bayesian)
 │ ├── viz/ # Visualization tools (plots, browser, etc.)
+| ├── analysis/ # GWAS analyses and pipelines
+│    └── gwas/
+│        └── ...
 │ └── utils/ # Shared helpers
 ├── tests/ # Unit tests for core modules
 ├── poetry.lock # Dependency lockfile
