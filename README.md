@@ -96,7 +96,7 @@ model.summary()
 
 - [x] Repo initialization and Poetry setup
 - [x] Simulated phenotype dataset
-- [ ] Mixed-effects modeling pipeline
+- [x] Mixed-effects modeling pipeline
 - [ ] Bayesian modeling
 - [ ] Population structure correction (PCA, etc.)
 - [ ] Visualization (Manhattan plot, genome browser)
