@@ -40,9 +40,6 @@ gsoc-malaria-ir-detection/
 │ ├── viz/ # Visualization tools (plots, browser, etc.)
 │ └── utils/ # Shared helpers
 ├── tests/ # Unit tests for core modules
-├── analysis/ # GWAS analyses and pipelines
-│   └── gwas/
-│       └── ...
 ├── poetry.lock # Dependency lockfile
 ├── pyproject.toml # Poetry dependency config
 ├── README.md
