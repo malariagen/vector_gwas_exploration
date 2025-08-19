@@ -5,7 +5,9 @@ import scipy.stats
 import warnings
 
 from malariagen_data import Ag3
-from src.utils.gwas_utils import parse_regions
+from utils.gwas_utils import parse_regions
+
+
 class GWASScanner:
     """
     Performs a genome-wide scan using a fast statistical test (Chi-squared)
