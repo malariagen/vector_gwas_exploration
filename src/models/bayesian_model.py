@@ -27,20 +27,29 @@ class BayesianModel:
         self.idata = None  # Stores InferenceData from ArviZ
         self.summary_df = None
 
-    def fit(self, analysis_df: pd.DataFrame, variant_names: list, pc_names: list):
+    def fit(self,
+            analysis_df: pd.DataFrame,
+            variant_names: list,
+            pc_names: list,
+            use_informative_priors: bool = True,
+            include_interaction: bool = False):
         """
         Fits the Bayesian model to the provided data using MCMC sampling.
 
         Parameters
         ----------
         analysis_df : pd.DataFrame
-            A DataFrame containing the phenotype, binary-encoded variant data
-            (e.g., 'has_variant_X'), and principal components.
-            The phenotype column must be named 'phenotype'.
+            DataFrame containing the phenotype, variant data, and PCs.
         variant_names : list
-            A list of column names corresponding to the genetic variants.
+            List of column names for the genetic variants.
         pc_names : list
-            A list of column names corresponding to the principal components.
+            List of column names for the principal components.
+        use_informative_priors : bool, optional
+            If True, applies priors centered on a positive effect for known
+            resistance genes. Defaults to True.
+        include_interaction : bool, optional
+            If True and there are exactly two variants, includes an interaction
+            term between them. Defaults to False.
         """
         phenotype = analysis_df['phenotype'].values
         X_variants = analysis_df[variant_names].values
@@ -52,70 +61,74 @@ class BayesianModel:
         }
 
         with pm.Model(coords=coords) as self.model:
-            # --- Priors ---
             intercept = pm.Normal("intercept", mu=0, sigma=10)
             
-            # Priors for variant coefficients with informative logic
-            # This demonstrates how to incorporate prior knowledge into the model.
-            variant_coeffs = []
+            # --- Main Effects for Variants ---
+            variant_coeffs_list = []
             for var_name in variant_names:
-                if 'vgsc' in var_name.lower() or 'ace1' in var_name.lower():
+                if use_informative_priors and ('vgsc' in var_name.lower() or 'ace1' in var_name.lower()):
                     print(f"Using INFORMATIVE prior for known gene: {var_name}")
-                    # Prior centered on a positive effect (mu=1.0) with some uncertainty
                     beta = pm.Normal(f"beta_{var_name}", mu=1.0, sigma=0.75)
                 else:
                     print(f"Using NON-INFORMATIVE prior for: {var_name}")
-                    # Weakly regularizing prior centered on zero for other variants
                     beta = pm.Normal(f"beta_{var_name}", mu=0, sigma=2.5)
-                variant_coeffs.append(beta)
+                variant_coeffs_list.append(beta)
             
-            # Combine the individual priors into a single tensor
-            variant_coeffs = pm.math.stack(variant_coeffs)
+            variant_coeffs = pm.math.stack(variant_coeffs_list)
             
-            # Priors for PC coefficients (always non-informative)
+            # --- Covariates ---
             pc_coeffs = pm.Normal("pc_coeffs", mu=0, sigma=2.5, dims="pc_predictors")
 
-            # --- Linear Model ---
+            # --- Linear Model (start with main effects) ---
             logit_p = intercept + pm.math.dot(X_variants, variant_coeffs) + pm.math.dot(X_pcs, pc_coeffs)
+
+            # --- Interaction Term (Optional) ---
+            interaction_term_name = None
+            if include_interaction and len(variant_names) == 2:
+                interaction_term_name = f"beta_{variant_names[0]}:{variant_names[1]}"
+                print(f"Including INTERACTION term: {interaction_term_name}")
+                
+                # Prior for the interaction coefficient (always non-informative)
+                beta_interaction = pm.Normal(interaction_term_name, mu=0, sigma=2.5)
+                
+                # Calculate the interaction data (product of the two variant columns)
+                X_interaction = X_variants[:, 0] * X_variants[:, 1]
+                
+                # Add interaction to the linear model
+                logit_p += beta_interaction * X_interaction
 
             # --- Likelihood ---
             pm.Bernoulli("obs", logit_p=logit_p, observed=phenotype)
 
             # --- MCMC Sampling ---
-            print("Starting MCMC sampling... (This may take a few minutes)")
+            print("Starting MCMC sampling...")
             self.idata = pm.sample(
-                draws=2000,
-                tune=1500,
-                chains=2,
-                cores=1,  # Best for compatibility
-                random_seed=self.random_seed,
-                progressbar=True
+                draws=2000, tune=1500, chains=2, cores=1,
+                random_seed=self.random_seed, progressbar=True
             )
             print("Sampling complete.")
 
-        # Generate a summary of the posterior for the get_params method.
-        self._create_summary(variant_names)
+        self._create_summary(variant_names, interaction_term_name)
 
-    def _create_summary(self, variant_names):
+    def _create_summary(self, variant_names, interaction_term_name=None):
         """Generates a summary DataFrame from the inference data."""
         if self.idata is None:
             raise RuntimeError("Model has not been fitted. Call .fit() first.")
 
-        # Create a list of the variables we want to summarize
         beta_var_names = [f"beta_{var}" for var in variant_names]
         vars_to_summarize = beta_var_names + ["pc_coeffs"]
+        if interaction_term_name:
+            vars_to_summarize.append(interaction_term_name)
         
         self.summary_df = az.summary(
-            self.idata,
-            var_names=vars_to_summarize,
-            hdi_prob=0.95
+            self.idata, var_names=vars_to_summarize, hdi_prob=0.95
         )
         
-        # Clean up the index to use the original, more readable variant names
-        # This is more robust than string splitting
         param_map = {f"beta_{var}": var for var in variant_names}
         param_map.update({f"pc_coeffs[{i}]": f"PC{i+1}" for i in range(len(self.model.coords['pc_predictors']))})
-        
+        if interaction_term_name:
+             param_map[interaction_term_name] = interaction_term_name.replace("beta_", "")
+
         self.summary_df.index = self.summary_df.index.map(param_map)
         self.summary_df.index.name = "parameter"
 
