@@ -32,9 +32,12 @@ class BayesianModel:
             variant_names: list,
             pc_names: list,
             use_informative_priors: bool = True,
-            include_interaction: bool = False):
+            include_interaction: bool = False,
+            chains: int = 2,
+            cores: int = 1):
         """
         Fits the Bayesian model to the provided data using MCMC sampling.
+        Includes a numerical stability fix for datasets with separation issues.
 
         Parameters
         ----------
@@ -50,6 +53,11 @@ class BayesianModel:
         include_interaction : bool, optional
             If True and there are exactly two variants, includes an interaction
             term between them. Defaults to False.
+        chains : int, optional
+            The number of MCMC chains to run. Defaults to 2.
+        cores : int, optional
+            The number of CPU cores to use for parallel sampling. Defaults to 1.
+            For best performance, set this equal to `chains`.
         """
         phenotype = analysis_df['phenotype'].values
         X_variants = analysis_df[variant_names].values
@@ -71,13 +79,18 @@ class BayesianModel:
                     beta = pm.Normal(f"beta_{var_name}", mu=1.0, sigma=0.75)
                 else:
                     print(f"Using NON-INFORMATIVE prior for: {var_name}")
-                    beta = pm.Normal(f"beta_{var_name}", mu=0, sigma=2.5)
+                    # --- CHANGE 1: STRONGER PRIOR ---
+                    # Changed sigma from 2.5 to 1.0 to regularize the model and
+                    # improve stability, preventing coefficients from becoming too large.
+                    beta = pm.Normal(f"beta_{var_name}", mu=0, sigma=1.0)
                 variant_coeffs_list.append(beta)
             
             variant_coeffs = pm.math.stack(variant_coeffs_list)
             
             # --- Covariates ---
-            pc_coeffs = pm.Normal("pc_coeffs", mu=0, sigma=2.5, dims="pc_predictors")
+            # --- CHANGE 2: STRONGER PRIOR ---
+            # Also applied the stronger prior to PC coefficients for consistency.
+            pc_coeffs = pm.Normal("pc_coeffs", mu=0, sigma=1.0, dims="pc_predictors")
 
             # --- Linear Model (start with main effects) ---
             logit_p = intercept + pm.math.dot(X_variants, variant_coeffs) + pm.math.dot(X_pcs, pc_coeffs)
@@ -88,23 +101,32 @@ class BayesianModel:
                 interaction_term_name = f"beta_{variant_names[0]}:{variant_names[1]}"
                 print(f"Including INTERACTION term: {interaction_term_name}")
                 
-                # Prior for the interaction coefficient (always non-informative)
-                beta_interaction = pm.Normal(interaction_term_name, mu=0, sigma=2.5)
+                # Applied stronger prior to the interaction term as well.
+                beta_interaction = pm.Normal(interaction_term_name, mu=0, sigma=1.0)
                 
-                # Calculate the interaction data (product of the two variant columns)
                 X_interaction = X_variants[:, 0] * X_variants[:, 1]
-                
-                # Add interaction to the linear model
                 logit_p += beta_interaction * X_interaction
 
-            # --- Likelihood ---
-            pm.Bernoulli("obs", logit_p=logit_p, observed=phenotype)
+            # Instead of passing `logit_p` directly to the Bernoulli likelihood,
+            # we calculate the probability `p` and clip it to prevent it from
+            # becoming exactly 0 or 1. This avoids log(0) errors and fixes the
+            # "division by zero" warning, allowing the NUTS sampler to work efficiently.
+            p = pm.math.invlogit(logit_p)
+            epsilon = 1e-6
+            p = pm.math.clip(p, epsilon, 1 - epsilon)
+            pm.Bernoulli("obs", p=p, observed=phenotype)
 
             # --- MCMC Sampling ---
-            print("Starting MCMC sampling...")
+            # The `chains` and `cores` parameters are now passed in from the
+            # method signature, making the function more flexible for the user.
+            print(f"Starting MCMC sampling with {chains} chains on {cores} cores...")
             self.idata = pm.sample(
-                draws=2000, tune=1500, chains=2, cores=1,
-                random_seed=self.random_seed, progressbar=True
+                draws=2000,
+                tune=1500,
+                chains=chains,
+                cores=cores,
+                random_seed=self.random_seed,
+                progressbar=True
             )
             print("Sampling complete.")
 
@@ -132,7 +154,6 @@ class BayesianModel:
         self.summary_df.index = self.summary_df.index.map(param_map)
         self.summary_df.index.name = "parameter"
 
-
     def get_params(self) -> pd.DataFrame:
         """
         Returns a DataFrame with a summary of the model's posterior distribution.
@@ -144,6 +165,6 @@ class BayesianModel:
             mean, standard deviation, and 95% highest density interval (HDI).
         """
         if self.summary_df is None:
-            self._create_summary()
+            self._create_summary() 
 
         return self.summary_df[['mean', 'sd', 'hdi_2.5%', 'hdi_97.5%']]
