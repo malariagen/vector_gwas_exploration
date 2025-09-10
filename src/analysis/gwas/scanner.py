@@ -17,22 +17,19 @@ class GWASScanner:
     def __init__(self, ag3: Ag3):
         """
         Initializes the scanner with a malariagen_data Ag3 object.
-
-        Parameters
-        ----------
-        ag3 : Ag3
-            An instantiated Ag3 data resource object.
         """
         self.ag3 = ag3
         self.results_df = None
 
-    def _prepare_phenotypes(self, insecticide: str, sample_sets: list) -> pd.Series:
+    def _prepare_phenotypes(self, insecticide: str) -> pd.Series:
         """
         Loads and prepares a clean pandas Series of binary phenotypes.
         """
         print(f"Loading and preparing phenotypes for {insecticide}...")
+        # Get all available sample sets with phenotype data
+        phenotype_sample_sets = self.ag3.phenotype_sample_sets()
         pheno_series = self.ag3.phenotype_binary(
-            sample_sets=sample_sets,
+            sample_sets=phenotype_sample_sets,
             insecticide=insecticide
         ).dropna().astype(int)
 
@@ -54,35 +51,26 @@ class GWASScanner:
         insecticide : str
             The insecticide to use for phenotype filtering (e.g., 'Deltamethrin').
         region : str or list of str, optional
-            The genomic region(s) to scan. Can be a contig name ('2L'), a region
-            string ('2L:1-10,000,000'), or a list of these. 
-            If None, scans all major chromosome arms.
+            The genomic region(s) to scan. Defaults to all major chromosome arms.
         chunk_size : int, optional
             The size of the genomic window to process in each iteration.
         
         Returns
         -------
         pd.DataFrame
-            A DataFrame containing the scan results (contig, pos, p_value).
+            A DataFrame containing the scan results.
         """
-        phenotype_sample_sets = self.ag3.phenotype_sample_sets()
-        pheno_series = self._prepare_phenotypes(insecticide, phenotype_sample_sets)
-        
-        pheno_df = pheno_series.to_frame(name='phenotype')
-        pheno_sample_ids = pheno_df.index.tolist()
+        pheno_series = self._prepare_phenotypes(insecticide)
+        pheno_sample_ids = pheno_series.index.tolist()
         sample_query = f"sample_id in {pheno_sample_ids}"
         
         results = []
-        
-        # Use the new helper function to parse the user's region input
         regions_to_scan = parse_regions(self.ag3, region)
 
-        # The main loop now iterates over a standardized list of (contig, start, end) tuples
         for contig, start_pos, end_pos in regions_to_scan:
             print(f"\n--- Processing region {contig}:{start_pos}-{end_pos} ---")
             
             try:
-                # Iterate through the region in chunks
                 for start in range(start_pos, end_pos + 1, chunk_size):
                     chunk_end = min(start + chunk_size - 1, end_pos)
                     chunk_region = f"{contig}:{start}-{chunk_end}"
@@ -97,36 +85,40 @@ class GWASScanner:
                     if ds_chunk.sizes['variants'] == 0:
                         continue
                     
-                    # Binarize the genotype data
-                    has_variant_matrix = (ds_chunk['call_genotype'].values > 0).any(axis=2)
+                    # 1. Get genotype data as a NumPy array (n_variants x n_samples)
+                    #    and binarize it. This is much faster than creating a DataFrame.
+                    has_variant_matrix = (ds_chunk['call_genotype'].values > 0).any(axis=2).T
                     
-                    # Manually create the genotype DataFrame, transposing the data
-                    geno_df = pd.DataFrame(
-                        data=has_variant_matrix.T,
-                        index=ds_chunk.sample_id.values,
-                        columns=ds_chunk.variant_position.values
-                    )
-                    
-                    # Join with phenotype data
-                    combined_df = pheno_df.join(geno_df, how='inner')
+                    # 2. Align the phenotype vector to the exact order of samples in the genotype chunk.
+                    #    This is a single, fast lookup operation.
+                    phenotypes_aligned = pheno_series.loc[ds_chunk.sample_id.values].values
 
-                    # Iterate through the SNPs in the chunk
-                    for pos_col in geno_df.columns:
-                        contingency_table = pd.crosstab(
-                            combined_df['phenotype'], 
-                            combined_df[pos_col]
-                        )
+                    # 3. Get the positions for this chunk.
+                    positions = ds_chunk.variant_position.values
+
+                    # 4. Iterate through SNPs (now rows in our matrix) and perform the test.
+                    #    This loop uses pure NumPy, which is significantly faster than iterating
+                    #    over pandas columns and using pd.crosstab.
+                    for i in range(has_variant_matrix.shape[0]):
+                        geno_vector = has_variant_matrix[i, :]
                         
-                        if contingency_table.shape == (2, 2):
-                            chi2, p, dof, expected = scipy.stats.chi2_contingency(contingency_table, correction=False)
-                            results.append({'contig': contig, 'pos': pos_col, 'p_value': p})
+                        # Create the 2x2 contingency table manually
+                        table = np.zeros((2, 2), dtype=int)
+                        for p, g in zip(phenotypes_aligned, geno_vector):
+                            table[p, int(g)] += 1
+                        
+                        # Check for validity (no zero counts in a row/column) before testing
+                        if np.all(table.sum(axis=0) > 0) and np.all(table.sum(axis=1) > 0):
+                            chi2, p, dof, expected = scipy.stats.chi2_contingency(table, correction=False)
+                            results.append({'contig': contig, 'pos': positions[i], 'p_value': p})
+
 
             except Exception as e:
                 print(f"  Could not process region {contig}:{start_pos}-{end_pos} due to error: {e}")
 
-        # Finalize and return the results DataFrame
         self.results_df = pd.DataFrame(results)
         if not self.results_df.empty:
+            # Replace p-values of 0 with a very small number to avoid log10 errors
             self.results_df['p_value'] = self.results_df['p_value'].replace(0, np.finfo(float).tiny)
             self.results_df['-log10(p)'] = -np.log10(self.results_df['p_value'])
         
