@@ -1,7 +1,3 @@
-# Ignore generated output files
-/output/
-
-
 .venv/
 data/
 !src/data/
