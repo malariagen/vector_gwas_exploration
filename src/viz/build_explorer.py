@@ -2,8 +2,18 @@ import pandas as pd
 import numpy as np
 import os
 from bokeh.plotting import figure, show, output_file
-from bokeh.models import ColumnDataSource, HoverTool, BoxSelectTool, CustomJS, TapTool, Div, NumeralTickFormatter, TabPanel, Tabs
+from bokeh.models import (
+    ColumnDataSource,
+    HoverTool,
+    CustomJS,
+    TapTool,
+    Div,
+    NumeralTickFormatter,
+    TabPanel,
+    Tabs,
+)
 from bokeh.layouts import column
+
 
 def build_standalone_html():
     """
@@ -13,80 +23,183 @@ def build_standalone_html():
 
     # --- 1. Load Data ---
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    project_root = os.path.abspath(os.path.join(script_dir, '../../'))
-    data_path = os.path.join(project_root, 'data/')
-    output_path = os.path.join(project_root, 'output/')
-    
+    project_root = os.path.abspath(os.path.join(script_dir, "../../"))
+    data_path = os.path.join(project_root, "data/")
+    output_path = os.path.join(project_root, "output/")
+
     try:
-        gwas_full_df = pd.read_csv(os.path.join(data_path, 'mock_gwas_full_scan.csv'))
-        verified_hits_df = pd.read_csv(os.path.join(data_path, 'mock_verification_hits.csv'))
-        gene_annotations_df = pd.read_csv(os.path.join(data_path, 'mock_gene_annotations.csv'))
+        gwas_full_df = pd.read_csv(os.path.join(data_path, "mock_gwas_full_scan.csv"))
+        verified_hits_df = pd.read_csv(
+            os.path.join(data_path, "mock_verification_hits.csv")
+        )
+        gene_annotations_df = pd.read_csv(
+            os.path.join(data_path, "mock_gene_annotations.csv")
+        )
         print("All mock data files loaded successfully.")
     except FileNotFoundError as e:
-        print(f"Error: {e}. Please ensure mock data is generated."); return
+        print(f"Error: {e}. Please ensure mock data is generated.")
+        return
 
     # --- 2. Prepare Data Sources ---
-    gwas_full_df['-log10(p)_display'] = gwas_full_df['-log10(p)'].clip(upper=12)
-    contig_order = ['2L', '2R', '3L', '3R', 'X']; contig_starts = {}
-    gwas_full_df['contig_cat'] = pd.Categorical(gwas_full_df['contig'], categories=contig_order, ordered=True)
-    gwas_full_df = gwas_full_df.sort_values(['contig_cat', 'pos'])
+    gwas_full_df["-log10(p)_display"] = gwas_full_df["-log10(p)"].clip(upper=12)
+    contig_order = ["2L", "2R", "3L", "3R", "X"]
+    contig_starts = {}
+    gwas_full_df["contig_cat"] = pd.Categorical(
+        gwas_full_df["contig"], categories=contig_order, ordered=True
+    )
+    gwas_full_df = gwas_full_df.sort_values(["contig_cat", "pos"])
 
-    cumulative_pos = 0; contig_centers = {}
-    gwas_full_df['pos_cumulative'] = 0
+    cumulative_pos = 0
+    contig_centers = {}
+    gwas_full_df["pos_cumulative"] = 0
     for contig in contig_order:
-        subset = gwas_full_df[gwas_full_df['contig'] == contig]
+        subset = gwas_full_df[gwas_full_df["contig"] == contig]
         if not subset.empty:
-            gwas_full_df.loc[subset.index, 'pos_cumulative'] = subset['pos'] + cumulative_pos
+            gwas_full_df.loc[subset.index, "pos_cumulative"] = (
+                subset["pos"] + cumulative_pos
+            )
             contig_starts[contig] = cumulative_pos
-            contig_centers[contig] = cumulative_pos + subset['pos'].median()
-            cumulative_pos += subset['pos'].max()
+            contig_centers[contig] = cumulative_pos + subset["pos"].median()
+            cumulative_pos += subset["pos"].max()
 
-    gwas_full_df['color'] = gwas_full_df['contig_cat'].cat.codes.apply(lambda x: '#2c3e50' if x % 2 == 0 else '#7f8c8d')
-    verified_hits_df['-log10(p)'] = -np.log10(verified_hits_df['p_value'])
+    gwas_full_df["color"] = gwas_full_df["contig_cat"].cat.codes.apply(
+        lambda x: "#2c3e50" if x % 2 == 0 else "#7f8c8d"
+    )
+    verified_hits_df["-log10(p)"] = -np.log10(verified_hits_df["p_value"])
 
     # Downsample for performance
     n_points_to_plot = 150000
-    significant_points = gwas_full_df[gwas_full_df['-log10(p)'] > 4]
-    non_significant_points = gwas_full_df[gwas_full_df['-log10(p)'] <= 4]
+    significant_points = gwas_full_df[gwas_full_df["-log10(p)"] > 4]
+    non_significant_points = gwas_full_df[gwas_full_df["-log10(p)"] <= 4]
     n_background = n_points_to_plot - len(significant_points)
-    background_sample = non_significant_points.sample(n=min(n_background, len(non_significant_points)), random_state=42)
+    background_sample = non_significant_points.sample(
+        n=min(n_background, len(non_significant_points)), random_state=42
+    )
     plot_df = pd.concat([significant_points, background_sample])
-    
+
     # Bokeh ColumnDataSources
     full_scan_source = ColumnDataSource(plot_df)
-    regional_scan_source = ColumnDataSource(data={'pos': [], '-log10(p)': []}) 
-    regional_hits_source = ColumnDataSource(data={'pos': [], '-log10(p)': [], 'log_odds_mixed': [], 'ci_lower_mixed': [], 'ci_upper_mixed': []})
-    gene_source = ColumnDataSource(data={'start': [], 'end': [], 'gene_name': [], 'y': []})
-    detail_title = Div(text="<h3>SNP Details (Click a red point in the Regional Plot)</h3>", width=800)
+    regional_scan_source = ColumnDataSource(data={"pos": [], "-log10(p)": []})
+    regional_hits_source = ColumnDataSource(
+        data={
+            "pos": [],
+            "-log10(p)": [],
+            "log_odds_mixed": [],
+            "ci_lower_mixed": [],
+            "ci_upper_mixed": [],
+        }
+    )
+    gene_source = ColumnDataSource(
+        data={"start": [], "end": [], "gene_name": [], "y": []}
+    )
+    detail_title = Div(
+        text="<h3>SNP Details (Click a red point in the Regional Plot)</h3>", width=800
+    )
 
     # --- 3. Create Plots and Widgets ---
-    p1 = figure(height=400, width=1200, title="GWAS Explorer: Genome-Wide Manhattan Plot", tools="pan,wheel_zoom,box_select,reset,save", active_drag="box_select")
-    p1.add_tools(HoverTool(tooltips=[("Contig", "@contig"), ("Position", "@pos"), ("P-value", "@p_value{1.1e}")]))
-    p1.scatter(x='pos_cumulative', y='-log10(p)_display', color='color', source=full_scan_source, alpha=0.7, size=4)
-    p1.xaxis.ticker = list(contig_centers.values()); p1.xaxis.major_label_overrides = {int(v): k for k, v in contig_centers.items()}
-    p1.x_range.range_padding = 0.02; p1.yaxis.axis_label = "-log10(p-value)"; p1.xaxis.axis_label = "Genomic Position"
-    
-    p2_hover = HoverTool(tooltips=[("Position", "@pos"), ("Log-Odds", "@log_odds_mixed{%.2f}"), ("95% CI", "[@{ci_lower_mixed}{%.2f}, @{ci_upper_mixed}{%.2f}]")], name="verified_hits_glyph")
-    p2 = figure(height=400, width=1200, title="Regional Plot (Select a region on the Manhattan Plot to zoom)", tools=['pan', 'wheel_zoom', 'box_zoom', 'reset', 'save', TapTool(), p2_hover])
-    p2.scatter(x='pos', y='-log10(p)', source=regional_scan_source, size=5, color="gray", alpha=0.6, legend_label="All Scan SNPs")
-    p2.scatter(x='pos', y='-log10(p)', source=regional_hits_source, size=8, color="red", legend_label="Verified Hits (Mixed-Effects)", name="verified_hits_glyph")
-    p2.quad(top=0.2, bottom=-0.2, left='start', right='end', source=gene_source, fill_color="blue", line_color=None, alpha=0.3, legend_label="Genes")
-    p2.legend.location = "top_left"; p2.legend.click_policy="hide"; p2.xaxis.formatter = NumeralTickFormatter(format="0,0")
-    p2.yaxis.axis_label = "-log10(p-value)"; p2.xaxis.axis_label = "Position on Contig"
-    
+    p1 = figure(
+        height=400,
+        width=1200,
+        title="GWAS Explorer: Genome-Wide Manhattan Plot",
+        tools="pan,wheel_zoom,box_select,reset,save",
+        active_drag="box_select",
+    )
+    p1.add_tools(
+        HoverTool(
+            tooltips=[
+                ("Contig", "@contig"),
+                ("Position", "@pos"),
+                ("P-value", "@p_value{1.1e}"),
+            ]
+        )
+    )
+    p1.scatter(
+        x="pos_cumulative",
+        y="-log10(p)_display",
+        color="color",
+        source=full_scan_source,
+        alpha=0.7,
+        size=4,
+    )
+    p1.xaxis.ticker = list(contig_centers.values())
+    p1.xaxis.major_label_overrides = {int(v): k for k, v in contig_centers.items()}
+    p1.x_range.range_padding = 0.02
+    p1.yaxis.axis_label = "-log10(p-value)"
+    p1.xaxis.axis_label = "Genomic Position"
+
+    p2_hover = HoverTool(
+        tooltips=[
+            ("Position", "@pos"),
+            ("Log-Odds", "@log_odds_mixed{%.2f}"),
+            ("95% CI", "[@{ci_lower_mixed}{%.2f}, @{ci_upper_mixed}{%.2f}]"),
+        ],
+        name="verified_hits_glyph",
+    )
+    p2 = figure(
+        height=400,
+        width=1200,
+        title="Regional Plot (Select a region on the Manhattan Plot to zoom)",
+        tools=["pan", "wheel_zoom", "box_zoom", "reset", "save", TapTool(), p2_hover],
+    )
+    p2.scatter(
+        x="pos",
+        y="-log10(p)",
+        source=regional_scan_source,
+        size=5,
+        color="gray",
+        alpha=0.6,
+        legend_label="All Scan SNPs",
+    )
+    p2.scatter(
+        x="pos",
+        y="-log10(p)",
+        source=regional_hits_source,
+        size=8,
+        color="red",
+        legend_label="Verified Hits (Mixed-Effects)",
+        name="verified_hits_glyph",
+    )
+    p2.quad(
+        top=0.2,
+        bottom=-0.2,
+        left="start",
+        right="end",
+        source=gene_source,
+        fill_color="blue",
+        line_color=None,
+        alpha=0.3,
+        legend_label="Genes",
+    )
+    p2.legend.location = "top_left"
+    p2.legend.click_policy = "hide"
+    p2.xaxis.formatter = NumeralTickFormatter(format="0,0")
+    p2.yaxis.axis_label = "-log10(p-value)"
+    p2.xaxis.axis_label = "Position on Contig"
+
     # --- 4. Create Tabs ---
-    tabs = Tabs(tabs=[
-        TabPanel(child=column(p1), title="1. Genome-Wide Scan"),
-        TabPanel(child=column(p2), title="2. Regional Detail"),
-        TabPanel(child=column(detail_title), title="3. SNP Detail")
-    ])
+    tabs = Tabs(
+        tabs=[
+            TabPanel(child=column(p1), title="1. Genome-Wide Scan"),
+            TabPanel(child=column(p2), title="2. Regional Detail"),
+            TabPanel(child=column(detail_title), title="3. SNP Detail"),
+        ]
+    )
 
     # --- 5. Define Interactivity with CustomJS ---
     box_select_callback = CustomJS(
-        args=dict(full_scan_source_all=ColumnDataSource(gwas_full_df), regional_scan_source=regional_scan_source,
-                  all_hits_data=ColumnDataSource(verified_hits_df), regional_hits_source=regional_hits_source,
-                  all_genes=ColumnDataSource(gene_annotations_df), gene_source=gene_source, 
-                  p2=p2, tabs=tabs, contig_starts=contig_starts, contig_order=contig_order, detail_title=detail_title),
+        args=dict(
+            full_scan_source_all=ColumnDataSource(gwas_full_df),
+            regional_scan_source=regional_scan_source,
+            all_hits_data=ColumnDataSource(verified_hits_df),
+            regional_hits_source=regional_hits_source,
+            all_genes=ColumnDataSource(gene_annotations_df),
+            gene_source=gene_source,
+            p2=p2,
+            tabs=tabs,
+            contig_starts=contig_starts,
+            contig_order=contig_order,
+            detail_title=detail_title,
+        ),
         code="""
             const geometry = cb_obj.geometry;
             const selection_start = geometry.x0;
@@ -153,10 +266,10 @@ def build_standalone_html():
             
             p2.change.emit();
             tabs.active = 1;
-        """
+        """,
     )
-    p1.js_on_event('selectiongeometry', box_select_callback)
-    
+    p1.js_on_event("selectiongeometry", box_select_callback)
+
     tap_callback = CustomJS(
         args=dict(source=regional_hits_source, detail_title=detail_title, tabs=tabs),
         code="""
@@ -178,18 +291,23 @@ def build_standalone_html():
                 </ul>
             `;
             tabs.active = 2;
-        """
+        """,
     )
     # Correctly select the GLYPH renderer and attach the callback to its data source's selection
-    p2.select(name="verified_hits_glyph")[0].data_source.selected.js_on_change('indices', tap_callback)
-    
+    p2.select(name="verified_hits_glyph")[0].data_source.selected.js_on_change(
+        "indices", tap_callback
+    )
+
     # --- 6. Save ---
     if not os.path.exists(output_path):
         os.makedirs(output_path)
     output_html_path = os.path.join(output_path, "gwas_explorer.html")
     output_file(output_html_path, title="GWAS Explorer")
     show(tabs)
-    print(f"Successfully generated standalone HTML file at: {os.path.abspath(output_html_path)}")
+    print(
+        f"Successfully generated standalone HTML file at: {os.path.abspath(output_html_path)}"
+    )
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     build_standalone_html()

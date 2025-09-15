@@ -3,6 +3,7 @@ import statsmodels.formula.api as smf
 import warnings
 from typing import List
 
+
 class MixedEffectsGWAS:
     """
     Fits a Linear Mixed-Effects Model (LMM) for association testing.
@@ -32,11 +33,13 @@ class MixedEffectsGWAS:
         self.analysis_df = None
         self.grouping_variable = grouping_variable
 
-    def fit(self,
-            analysis_df: pd.DataFrame,
-            variant_names: List[str],
-            pc_names: List[str],
-            include_interaction: bool = False):
+    def fit(
+        self,
+        analysis_df: pd.DataFrame,
+        variant_names: List[str],
+        pc_names: List[str],
+        include_interaction: bool = False,
+    ):
         """
         Fits the Linear Mixed-Effects Model.
 
@@ -82,7 +85,7 @@ class MixedEffectsGWAS:
             model = smf.mixedlm(
                 formula,
                 data=self.analysis_df,
-                groups=self.analysis_df[self.grouping_variable]
+                groups=self.analysis_df[self.grouping_variable],
             )
 
             self.results = model.fit()
@@ -106,18 +109,20 @@ class MixedEffectsGWAS:
         pvalues = self.results.pvalues
         conf_int = self.results.conf_int()
 
-        results_df = pd.DataFrame({
-            "coefficient": params,
-            "std_err": stderr,
-            "p_value": pvalues,
-            "conf_int_lower": conf_int.iloc[:, 0],
-            "conf_int_upper": conf_int.iloc[:, 1]
-        })
+        results_df = pd.DataFrame(
+            {
+                "coefficient": params,
+                "std_err": stderr,
+                "p_value": pvalues,
+                "conf_int_lower": conf_int.iloc[:, 0],
+                "conf_int_upper": conf_int.iloc[:, 1],
+            }
+        )
 
         # The random effect variance is stored separately
         # We can add it to the DataFrame for completeness
         group_var_name = f"{self.grouping_variable} Var"
-        results_df.loc[group_var_name, 'coefficient'] = self.results.cov_re.iloc[0, 0]
+        results_df.loc[group_var_name, "coefficient"] = self.results.cov_re.iloc[0, 0]
 
         return results_df
 
