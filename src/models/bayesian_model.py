@@ -1,7 +1,7 @@
 import pandas as pd
-import numpy as np
 import pymc as pm
 import arviz as az
+
 
 class BayesianModel:
     """
@@ -27,14 +27,16 @@ class BayesianModel:
         self.idata = None  # Stores InferenceData from ArviZ
         self.summary_df = None
 
-    def fit(self,
-            analysis_df: pd.DataFrame,
-            variant_names: list,
-            pc_names: list,
-            use_informative_priors: bool = True,
-            include_interaction: bool = False,
-            chains: int = 2,
-            cores: int = 1):
+    def fit(
+        self,
+        analysis_df: pd.DataFrame,
+        variant_names: list,
+        pc_names: list,
+        use_informative_priors: bool = True,
+        include_interaction: bool = False,
+        chains: int = 2,
+        cores: int = 1,
+    ):
         """
         Fits the Bayesian model to the provided data using MCMC sampling.
         Includes a numerical stability fix for datasets with separation issues.
@@ -59,7 +61,7 @@ class BayesianModel:
             The number of CPU cores to use for parallel sampling. Defaults to 1.
             For best performance, set this equal to `chains`.
         """
-        phenotype = analysis_df['phenotype'].values
+        phenotype = analysis_df["phenotype"].values
         X_variants = analysis_df[variant_names].values
         X_pcs = analysis_df[pc_names].values
 
@@ -70,11 +72,13 @@ class BayesianModel:
 
         with pm.Model(coords=coords) as self.model:
             intercept = pm.Normal("intercept", mu=0, sigma=10)
-            
+
             # --- Main Effects for Variants ---
             variant_coeffs_list = []
             for var_name in variant_names:
-                if use_informative_priors and ('vgsc' in var_name.lower() or 'ace1' in var_name.lower()):
+                if use_informative_priors and (
+                    "vgsc" in var_name.lower() or "ace1" in var_name.lower()
+                ):
                     print(f"Using INFORMATIVE prior for known gene: {var_name}")
                     beta = pm.Normal(f"beta_{var_name}", mu=1.0, sigma=0.75)
                 else:
@@ -84,26 +88,30 @@ class BayesianModel:
                     # improve stability, preventing coefficients from becoming too large.
                     beta = pm.Normal(f"beta_{var_name}", mu=0, sigma=1.0)
                 variant_coeffs_list.append(beta)
-            
+
             variant_coeffs = pm.math.stack(variant_coeffs_list)
-            
+
             # --- Covariates ---
             # --- CHANGE 2: STRONGER PRIOR ---
             # Also applied the stronger prior to PC coefficients for consistency.
             pc_coeffs = pm.Normal("pc_coeffs", mu=0, sigma=1.0, dims="pc_predictors")
 
             # --- Linear Model (start with main effects) ---
-            logit_p = intercept + pm.math.dot(X_variants, variant_coeffs) + pm.math.dot(X_pcs, pc_coeffs)
+            logit_p = (
+                intercept
+                + pm.math.dot(X_variants, variant_coeffs)
+                + pm.math.dot(X_pcs, pc_coeffs)
+            )
 
             # --- Interaction Term (Optional) ---
             interaction_term_name = None
             if include_interaction and len(variant_names) == 2:
                 interaction_term_name = f"beta_{variant_names[0]}:{variant_names[1]}"
                 print(f"Including INTERACTION term: {interaction_term_name}")
-                
+
                 # Applied stronger prior to the interaction term as well.
                 beta_interaction = pm.Normal(interaction_term_name, mu=0, sigma=1.0)
-                
+
                 X_interaction = X_variants[:, 0] * X_variants[:, 1]
                 logit_p += beta_interaction * X_interaction
 
@@ -126,7 +134,7 @@ class BayesianModel:
                 chains=chains,
                 cores=cores,
                 random_seed=self.random_seed,
-                progressbar=True
+                progressbar=True,
             )
             print("Sampling complete.")
 
@@ -141,15 +149,22 @@ class BayesianModel:
         vars_to_summarize = beta_var_names + ["pc_coeffs"]
         if interaction_term_name:
             vars_to_summarize.append(interaction_term_name)
-        
+
         self.summary_df = az.summary(
             self.idata, var_names=vars_to_summarize, hdi_prob=0.95
         )
-        
+
         param_map = {f"beta_{var}": var for var in variant_names}
-        param_map.update({f"pc_coeffs[{i}]": f"PC{i+1}" for i in range(len(self.model.coords['pc_predictors']))})
+        param_map.update(
+            {
+                f"pc_coeffs[{i}]": f"PC{i+1}"
+                for i in range(len(self.model.coords["pc_predictors"]))
+            }
+        )
         if interaction_term_name:
-             param_map[interaction_term_name] = interaction_term_name.replace("beta_", "")
+            param_map[interaction_term_name] = interaction_term_name.replace(
+                "beta_", ""
+            )
 
         self.summary_df.index = self.summary_df.index.map(param_map)
         self.summary_df.index.name = "parameter"
@@ -165,6 +180,6 @@ class BayesianModel:
             mean, standard deviation, and 95% highest density interval (HDI).
         """
         if self.summary_df is None:
-            self._create_summary() 
+            self._create_summary()
 
-        return self.summary_df[['mean', 'sd', 'hdi_2.5%', 'hdi_97.5%']]
+        return self.summary_df[["mean", "sd", "hdi_2.5%", "hdi_97.5%"]]
