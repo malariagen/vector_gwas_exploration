@@ -1,5 +1,4 @@
 import pandas as pd
-import numpy as np
 import xarray as xr
 import warnings
 from typing import Optional
@@ -16,9 +15,12 @@ class PhenotypeHelper:
             raise ValueError("Missing 'phenotype' column in DataFrame")
 
         phenotype_map = {
-            "alive": 1, "dead": 0,
-            "survived": 1, "died": 0,
-            "resistant": 1, "susceptible": 0,
+            "alive": 1,
+            "dead": 0,
+            "survived": 1,
+            "died": 0,
+            "resistant": 1,
+            "susceptible": 0,
         }
         phenotype_lower = df["phenotype"].astype(str).str.lower()
         binary = phenotype_lower.map(phenotype_map)
@@ -34,8 +36,7 @@ class PhenotypeHelper:
 
     @staticmethod
     def create_dataset(
-        df: pd.DataFrame,
-        variant_data: Optional[xr.Dataset] = None
+        df: pd.DataFrame, variant_data: Optional[xr.Dataset] = None
     ) -> xr.Dataset:
         """
         Build an xarray.Dataset combining phenotype data and optional variant dataset.
@@ -47,8 +48,16 @@ class PhenotypeHelper:
         data_vars = {
             "phenotype_binary": ("samples", binary.reindex(sample_ids).values),
             "phenotype": ("samples", df_idx["phenotype"].values),
-            "insecticide": ("samples", df_idx.get("insecticide", pd.Series(["simulated"]*len(df_idx))).values),
-            "dose": ("samples", df_idx.get("dose", pd.Series(["simulated"]*len(df_idx))).values),
+            "insecticide": (
+                "samples",
+                df_idx.get(
+                    "insecticide", pd.Series(["simulated"] * len(df_idx))
+                ).values,
+            ),
+            "dose": (
+                "samples",
+                df_idx.get("dose", pd.Series(["simulated"] * len(df_idx))).values,
+            ),
         }
         # Optional metadata columns
         for col in ["location", "country", "collection_date", "species", "sample_set"]:
@@ -60,7 +69,9 @@ class PhenotypeHelper:
         # Merge with variant_data if provided
         if variant_data is not None:
             try:
-                coord = next(c for c in ["samples", "sample_id"] if c in variant_data.coords)
+                coord = next(
+                    c for c in ["samples", "sample_id"] if c in variant_data.coords
+                )
                 common = list(set(sample_ids) & set(variant_data.coords[coord].values))
                 ds = ds.sel(samples=common)
                 var_ds = variant_data.sel({coord: common}).rename({coord: "samples"})
